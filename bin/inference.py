@@ -91,7 +91,7 @@ def decoder(cur_hidden_state, pipeline, cur_text, tts, codec_chunk_size, codec_p
                         codec_chunk_size, codec_padding_size):
         wav.append(seg)
 
-def inference(pipeline, audio_processor, tts, configs):
+def inference(pipeline:inferencePipeline, audio_processor:audioEncoderProcessor, tts:llm2TTS, configs):
     """
     Perform inference for a speech dialogue system.
 
