@@ -95,6 +95,10 @@ def inference(pipeline:inferencePipeline, audio_processor:audioEncoderProcessor,
     """
     Perform inference for a speech dialogue system.
 
+    流式语音输入通过语音编码器形成chunk-wise特征，然后通过适配器连接到LLM。
+    LLM生成隐藏状态和文本标记，在块分割后分别以块的形式发送到NAR前缀语音解码器和NAR语音解码器。
+    最后，AR语音解码器将生成的令牌发送到语音令牌FIFO中，流式编解码器根据固定的语音令牌块大小从FIFO生成流式语音输出。
+
     Parameters:
     - pipeline: Speech dialogue pipeline.
     - audio_processor: Processes raw audio data into a format suitable for the pipeline.
@@ -184,7 +188,10 @@ def inference(pipeline:inferencePipeline, audio_processor:audioEncoderProcessor,
 
 if __name__ == '__main__':
     configs = get_args()
+    # encoder and audio llm
     pipeline = inferencePipeline(configs)
+    # decoder
     tts = llm2TTS(configs.model_path)
+    # stream chunk to encoder
     audio_processor = audioEncoderProcessor()
     inference(pipeline, audio_processor, tts, configs)

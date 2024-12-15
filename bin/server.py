@@ -46,6 +46,13 @@ def custom_print(*args, **kwargs):
     current_time = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]
     original_print(f'[{current_time}]', *args, **kwargs)
 
+"""
+“模型作为服务器”策略来实现语音到语音对话系统。
+首先，我们同时启动多个模型，并将它们视为服务器。
+然后，当用户的VAD被触发时，语音将以块的形式发送到服务器，服务器将负责调度哪个空闲模型应该响应当前的块。
+由于我们在推理过程中将语音编码器和LLM的所有kv-cache和CNN缓存分开，因此服务器只需要保存每个用户的推理缓存。
+这样，服务器中的任何模型都可以响应任何用户的任何块，并且不需要指定哪个模型用作监视器或生成器。
+"""
 # init parms
 configs = get_args()
 # read server related config

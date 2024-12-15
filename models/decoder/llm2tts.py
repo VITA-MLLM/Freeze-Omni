@@ -15,10 +15,19 @@ from models.decoder.decoder import LLM2TTSCodecAR
 from models.decoder.ticodec.vqvae_tester import VqvaeTester
 
 class llm2TTS():
+    """
+    Modeling of speech output
+    受 VALL-E [5] 的启发，Freeze-Omni 使用基于令牌的语音解码器，其中包含 NAR 预填充和 AR 生成阶段来实现语音输出功能。
+    语音解码器主要由NAR解码器、AR解码器和编解码器模型的解码器组成。 NAR 解码器和 AR 解码器都是基于变压器块构建的。
+    NAR解码器用于根据LLM的输出对语义特征进行建模，然后AR解码器基于NAR解码器的输出生成语音标记。
+    最后，编解码器模型的解码器将语音标记转换为语音流。
+    """
     def __init__(self, model_path):
         self.model = self.get_model(model_path).cuda().to(
                                     torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float32
                                     )
+        num_params = sum(p.numel() for p in self.model.parameters())
+        print('the number of LLM2TTSCodecAR(NAR decoder and AR decoder(transformer blocks)) params: {}M'.format(num_params/1024/1024))
         self.infer = self.model.infer
 
         self.codec_model = VqvaeTester(config_path=model_path + "/codec/model.json", 
@@ -27,6 +36,8 @@ class llm2TTS():
         self.codec_model = self.codec_model.cuda()
         self.codec_model.vqvae.generator.remove_weight_norm()
         self.codec_model.vqvae.encoder.remove_weight_norm()
+        num_params = sum(p.numel() for p in self.codec_model.parameters())
+        print('after remove_weight_norm, the number of llm2TTS(vq-vae codec decoder model) params: {}M'.format(num_params/1024/1024))
         self.codec_model.eval()
 
     def get_model_conf(self, model_path):
