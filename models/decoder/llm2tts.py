@@ -27,7 +27,7 @@ class llm2TTS():
                                     torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float32
                                     )
         num_params = sum(p.numel() for p in self.model.parameters())
-        print('the number of LLM2TTSCodecAR(NAR decoder and AR decoder(transformer blocks)) params: {}M'.format(num_params/1024/1024))
+        print('the number of LLM2TTSCodecAR(NAR decoder and AR decoder(llama transformer blocks)) params: {}M'.format(num_params/1024/1024))
         self.infer = self.model.infer
 
         self.codec_model = VqvaeTester(config_path=model_path + "/codec/model.json", 
