@@ -18,9 +18,9 @@ class llm2TTS():
     """
     Modeling of speech output
     受 VALL-E [5] 的启发，Freeze-Omni 使用基于令牌的语音解码器，其中包含 NAR 预填充和 AR 生成阶段来实现语音输出功能。
-    语音解码器主要由NAR解码器、AR解码器和编解码器模型的解码器组成。 NAR 解码器和 AR 解码器都是基于变压器块构建的。
-    NAR解码器用于根据LLM的输出对语义特征进行建模，然后AR解码器基于NAR解码器的输出生成语音标记。
-    最后，编解码器模型的解码器将语音标记转换为语音流。
+    语音解码器主要由NAR解码器、AR解码器和编解码器模型的解码器组成。 NAR 解码器和 AR 解码器都是基于transformer块构建的。
+    NAR解码器用于根据LLM的输出对语义特征进行建模，然后AR解码器基于NAR解码器的输出生成语音token。
+    最后，编解码器模型的解码器将语音token转换为语音流。
     """
     def __init__(self, model_path):
         self.model = self.get_model(model_path).cuda().to(
