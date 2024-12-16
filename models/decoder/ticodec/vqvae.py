@@ -35,7 +35,7 @@ class VQVAE(nn.Module):
             self.encoder.load_state_dict(ckpt['encoder'])
         
         num_params = sum(p.numel() for p in self.parameters())
-        print('the number of vq-vqe(llm2tts) params: {}M'.format(num_params/1024/1024))
+        print('the number of vq-vae(llm2tts) params: {}M'.format(num_params/1024/1024))
 
     def forward(self, x, global_style_token):
         # x is the codebook
