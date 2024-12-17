@@ -69,7 +69,12 @@ class audioEncoderProcessor:
         self.input_chunk[:, self.chunk_overlap:, :] = xs.squeeze(0)
     
     def process(self,
-                audio: torch.Tensor):
+                audio: np.ndarray):
+        """
+        # 1. Converts the input audio tensor to the appropriate format.
+        # 2. Computes the filter bank features (fbank) for the audio.
+        # 3. Updates the input chunk and history based on the new audio segment.
+        """
         with torch.no_grad():
             sample_data = torch.tensor(audio).reshape(1, -1, 1)[:, :, :1] * 32768
             self.fbank_shift(sample_data)
@@ -80,6 +85,9 @@ class audioEncoderProcessor:
         return self.input_chunk.clone()
 
 def decoder(cur_hidden_state, pipeline, cur_text, tts, codec_chunk_size, codec_padding_size, decoder_topk, wav):
+    """
+    Decodes the current hidden state and text to generate audio segments using speech decoder.
+    """
     hidden_state_output = torch.cat(cur_hidden_state).squeeze(1)
     cur_text_procced = pipeline.post_process(cur_text)
     print("Synthesis: ", [cur_text_procced])
@@ -94,10 +102,6 @@ def decoder(cur_hidden_state, pipeline, cur_text, tts, codec_chunk_size, codec_p
 def inference(pipeline:inferencePipeline, audio_processor:audioEncoderProcessor, tts:llm2TTS, configs):
     """
     Perform inference for a speech dialogue system.
-
-    流式语音输入通过语音编码器形成chunk-wise特征，然后通过适配器连接到LLM。
-    LLM生成隐藏状态和文本标记，在块分割后分别以块的形式发送到NAR前缀语音解码器和NAR语音解码器。
-    最后，AR语音解码器将生成的令牌发送到语音令牌FIFO中，流式编解码器根据固定的语音令牌块大小从FIFO生成流式语音输出。
 
     Parameters:
     - pipeline: Speech dialogue pipeline.

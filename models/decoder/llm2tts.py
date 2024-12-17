@@ -123,7 +123,7 @@ class llm2TTS():
         return buffer, syn
 
     def run(self, hidden, top_k, prefix, codec_chunk_size=40, codec_padding_size=10, 
-            penalty_window_size=-1, penalty=1.1, N=2401, seg_threshold=0.01):
+            penalty_window_size=-1, penalty=1.1, N=2401, seg_threshold=0.01, max_tokens=1000):
         """
         Run the speech decoder process.
 
@@ -149,7 +149,8 @@ class llm2TTS():
                     dtype=torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float32):
                 print("Starting TTS...")
                 token = torch.full((1, 0), self.model.vocab_size, dtype=torch.long, device=hidden.device)
-                for next_token_id in self.infer(hidden, top_k, prefix, penalty_window_size, penalty):
+                for next_token_id in self.infer(
+                        hidden, top_k, prefix, penalty_window_size, penalty, max_tokens=max_tokens):
                     token = torch.cat([token, next_token_id], dim=-1)
                     if token.size(1) == left_padding + codec_chunk_size + right_padding:
                         syn = self.codec_model.vqvae(token.unsqueeze(-1), 
