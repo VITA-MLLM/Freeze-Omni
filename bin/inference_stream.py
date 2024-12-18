@@ -527,9 +527,11 @@ def inference_stream(listener: PCMListener, speaker: TTSSpeaker, configs):
     wav_input = torch.zeros(math.ceil(wav.shape[0] / chunk_size) * chunk_size)
     wav_input[: wav.shape[0]] = wav
     for i in range(0, wav_input.shape[0], chunk_size):
-        # send numpy ndarray pcm data
-        listener.send(wav.numpy())
-        listener.set_status("cl")
+        # send numpy ndarray pcm data with status
+        status = "sl"
+        if i > 0:
+            status = "cl"
+        listener.send(wav_input[i : i + chunk_size].numpy(), status=status)
 
     wavs = []
     # get tts speak data
