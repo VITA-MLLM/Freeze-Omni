@@ -2,6 +2,8 @@ import torch
 import re
 import os
 
+import yaml
+
 from models.audioLLM import AudioLLM
 
 from models.encoder.cmvn import GlobalCMVN, load_cmvn
@@ -27,6 +29,9 @@ def load_checkpoint(model: torch.nn.Module, path: str) -> dict:
     return configs
 
 def init_encoder_llm(configs):
+    """
+    init Modeling of speech input (encoder and audio llm)
+    """
     if configs['cmvn_file'] is not None:
         # read cmvn
         mean, istd = load_cmvn(configs['cmvn_file'], configs['is_json_cmvn'])
@@ -40,9 +45,13 @@ def init_encoder_llm(configs):
     input_dim = configs['input_dim']
     vocab_size = configs['output_dim']
 
-    # init speech encoder
+    # init speech encoder (几个下采样卷积层和几个 Transformer)
+    # 块式流式语音编码器将输入语音特征转换为高维表示
     encoder = speechEncoder(input_dim, global_cmvn=global_cmvn, **configs['encoder_conf'])
-    # init audioLLM
+    # init audioLLM 
+    # 默认： 适配器:CNN 仅包含几个下采样卷积层, 
+    # 适配器模块将高维表示映射到主干LLM的嵌入空间中
+    # 使用下采样的原因是为了降低语音特征的帧率，提高预填充阶段LLM的速度，降低延迟
     model = AudioLLM(encoder=encoder, **configs['model_conf'])
 
     return model
