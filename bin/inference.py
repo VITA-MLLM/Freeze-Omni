@@ -182,12 +182,14 @@ def inference(pipeline:inferencePipeline, audio_processor:audioEncoderProcessor,
                         decoder(cur_hidden_state, pipeline, cur_text, tts, 
                                 codec_chunk_size, codec_padding_size, decoder_topk, wav)
                         cur_hidden_state = []
+                        print(f"cur_text:{cur_text}")
                     cur_text = ""
         if outputs['stat'] == 'sl':
             break
-        # print(outputs['text'])
+        #print(outputs['text'])
         last_text = outputs['text']
     if len(cur_hidden_state) != 0:
+        print(f"cur_text:{cur_text}")
         decoder(cur_hidden_state, pipeline, cur_text, tts, 
                 codec_chunk_size, codec_padding_size, decoder_topk, wav)
 

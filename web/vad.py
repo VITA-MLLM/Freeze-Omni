@@ -134,12 +134,12 @@ class VAD:
             # return dict
             if return_dict['status'] == 'sl':
                 # copy last chunk size chunks
-                return_dict['feature_last_chunk'] = self.history[-self.last_chunk_size:].unsqueeze(1).numpy().tolist()
-                return_dict['feature'] = self.input_chunk.numpy().tolist()
-                return_dict['history_feature'] = self.history.numpy().tolist()
+                return_dict['feature_last_chunk'] = self.history[-self.last_chunk_size:].unsqueeze(1)
+                return_dict['feature'] = self.input_chunk
+                return_dict['history_feature'] = self.history
             elif return_dict['status'] == 'cl' or return_dict['status'] == 'el':
                 return_dict['feature_last_chunk'] = None
-                return_dict['feature'] = self.input_chunk.numpy().tolist()
-                return_dict['history_feature'] = self.history.numpy().tolist()
+                return_dict['feature'] = self.input_chunk
+                return_dict['history_feature'] = self.history
 
         return return_dict

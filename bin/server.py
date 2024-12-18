@@ -225,7 +225,7 @@ def llm_prefill(data, outputs, sid, is_first_pack=False):
         # Satge1: start listen
         # stat will be auto set to 'cl' after Stage1
         outputs = connected_users[sid][1].pipeline_obj.pipeline_proc.speech_dialogue(
-                                                                     torch.tensor(data['feature']), 
+                                                                     data['feature'], 
                                                                      **outputs)
         print(f"sl -> speech_dialogue outputs stat: {outputs['stat']}")
     
@@ -238,7 +238,7 @@ def llm_prefill(data, outputs, sid, is_first_pack=False):
             # Stage2: continue listen
             # stat will be auto set to 'ss' when endpoint is detected
             outputs = connected_users[sid][1].pipeline_obj.pipeline_proc.speech_dialogue(
-                                                                         torch.tensor(data['feature']), 
+                                                                         data['feature'], 
                                                                          **outputs)
             print(f"cl -> speech_dialogue outputs stat: {outputs['stat']}")
         if is_first_pack:

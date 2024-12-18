@@ -99,22 +99,20 @@ class GlobalVars:
 
     @staticmethod
     def deepcopy_outputs():
-        return deepcopy(GlobalVars.deepcopy_outputs)
+        return deepcopy(GlobalVars.speech_dialogue_outputs)
 
 
 @dataclass
 class PCMStatChunk:
-    size: int
     status: str  # sl(start listen), cl(continue listen), el(end listen)
     data: np.ndarray  # a numpy array of dtype np.float32
 
     def __post_init__(self):
-        super().__post_init__()
         if self.status not in ["sl", "cl", "el"]:
             raise ValueError("status must be one of: 'sl','cl','el'")
 
     def __str__(self):
-        return f"size:{self.size} status:{self.status} numpy data:{self.data.shape} {super().__str__()}"
+        return f"status:{self.status} numpy data:{self.data.shape}"
 
 
 class PCMListener:
@@ -176,9 +174,7 @@ class PCMListener:
                 padded_chunk[: len(chunk)] = chunk
                 chunk = padded_chunk
             # 将数据标准化到[-1,1]范围并发送到队列
-            item = PCMStatChunk(
-                size=chunk_size, status=status, data=chunk.astype(np.float32) / 32768.0
-            )
+            item = PCMStatChunk(status=status, data=chunk.astype(np.float32) / 32768.0)
             self.pcm_stat_chunk_queue.put(item)
 
     def history_buffering_strategy(self, input_chunk: torch.Tensor) -> torch.Tensor:
@@ -205,7 +201,8 @@ class PCMListener:
         if status == "sl":
             # Satge1: start listen
             # stat will be auto set to 'cl' after Stage1
-            outputs = self.pipeline.speech_dialogue(feature, **outputs)
+            outputs = self.pipeline.speech_dialogue(torch.tensor(feature.numpy().tolist()), **outputs)
+            print(f"sl --> output stat {outputs['stat']}")
         if status == "el":
             print("status end listen. Detect vad time out")
 
@@ -214,8 +211,8 @@ class PCMListener:
                 # Stage2: continue listen
                 # stat will be auto set to 'ss' when endpoint is detected
                 print("output stat continue listen")
-                outputs = self.pipeline.speech_dialogue(feature, **outputs)
-                print(f"speech_dialogue --> output stat {outputs['stat']}")
+                outputs = self.pipeline.speech_dialogue(torch.tensor(feature.numpy().tolist()), **outputs)
+                print(f"cl --> output stat {outputs['stat']}")
             if is_first_pack:
                 outputs["stat"] = "cl"
             if outputs["stat"] == "el":
@@ -254,7 +251,7 @@ class PCMListener:
                 if "hidden_state" in outputs:
                     del outputs["hidden_state"]
 
-                for i in range(feature_last_chunk):
+                for i in range(len(feature_last_chunk)):
                     if i == 0:
                         outputs = self.llm_prefill(
                             "sl", feature_last_chunk[i], outputs, is_first_pack=True
@@ -523,7 +520,8 @@ def inference_stream(listener: PCMListener, speaker: TTSSpeaker, configs):
         wav = torchaudio.transforms.Resample(orig_freq=fs, new_freq=16000)(wav.float())
         fs = 16000
 
-    chunk_size = list.audio_processor.get_chunk_size()
+    # like io_uring
+    chunk_size = listener.audio_processor.get_chunk_size()
     wav_input = torch.zeros(math.ceil(wav.shape[0] / chunk_size) * chunk_size)
     wav_input[: wav.shape[0]] = wav
     for i in range(0, wav_input.shape[0], chunk_size):
