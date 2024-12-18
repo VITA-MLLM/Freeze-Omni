@@ -22,7 +22,7 @@ class VAD:
         - 状态2表示无需中断对话。
         这两种状态都将停止向 Freeze-Omni 发送语音流并重置 VAD 模块。
     """
-    def __init__(self, cache_history=10):
+    def __init__(self, cache_history=10, last_chunk_size=6):
         self.chunk_size = 16
         self.chunk_overlap = 3
         self.feat_dim = 80
@@ -30,7 +30,9 @@ class VAD:
         self.frame_shift = 160
         self.frame_overlap = self.frame_size - self.frame_shift
         self.CHUNK = self.frame_shift * self.chunk_size
+        assert cache_history >= last_chunk_size, "cache_history must >= last_chunk_size"
         self.cache_history = cache_history
+        self.last_chunk_size = last_chunk_size
         self.in_dialog = False
 
         with torch.no_grad():
@@ -131,8 +133,8 @@ class VAD:
 
             # return dict
             if return_dict['status'] == 'sl':
-                # copy last 6 chunks
-                return_dict['feature_last_chunk'] = self.history[-6:].unsqueeze(1).numpy().tolist()
+                # copy last chunk size chunks
+                return_dict['feature_last_chunk'] = self.history[-self.last_chunk_size:].unsqueeze(1).numpy().tolist()
                 return_dict['feature'] = self.input_chunk.numpy().tolist()
                 return_dict['history_feature'] = self.history.numpy().tolist()
             elif return_dict['status'] == 'cl' or return_dict['status'] == 'el':

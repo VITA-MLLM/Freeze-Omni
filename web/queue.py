@@ -1,3 +1,4 @@
+from dataclasses import dataclass
 import json
 import torch
 import threading

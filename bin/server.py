@@ -227,6 +227,7 @@ def llm_prefill(data, outputs, sid, is_first_pack=False):
         outputs = connected_users[sid][1].pipeline_obj.pipeline_proc.speech_dialogue(
                                                                      torch.tensor(data['feature']), 
                                                                      **outputs)
+        print(f"sl -> speech_dialogue outputs stat: {outputs['stat']}")
     
     if data['status'] == 'el':
         connected_users[sid][1].wakeup_and_vad.in_dialog = False
@@ -239,6 +240,7 @@ def llm_prefill(data, outputs, sid, is_first_pack=False):
             outputs = connected_users[sid][1].pipeline_obj.pipeline_proc.speech_dialogue(
                                                                          torch.tensor(data['feature']), 
                                                                          **outputs)
+            print(f"cl -> speech_dialogue outputs stat: {outputs['stat']}")
         if is_first_pack:
             outputs['stat'] = 'cl'
         if outputs['stat'] == 'el':
@@ -275,6 +277,7 @@ def send_pcm(sid):
             continue
         print("Sid: ", sid, " Received PCM data: ", len(e))
         res = connected_users[sid][1].wakeup_and_vad.predict(np.float32(e))
+        print(f"wakeup_and_vad.predict -> res status: {res['status']}")
         
         if res['status'] == 'sl':
             print("Sid: ", sid, " Vad start")

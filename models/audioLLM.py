@@ -403,6 +403,8 @@ class AudioLLM(torch.nn.Module):
         top_p: float = 1.0,
         top_k: int = 0,
         temperature: float = 1.0,
+        el_prob: float = 0.5,
+        ss_prob: float = 0.5,
     ):
         """
         Generates the model's next output based on the current input and state.
@@ -413,6 +415,8 @@ class AudioLLM(torch.nn.Module):
         - top_p: The threshold for controlling top-p sampling.
         - top_k: The threshold for controlling top-k sampling.
         - temperature: Controls the randomness of sampling.
+        - el_prob: end listen stat logit prob
+        - ss_prob: start speak stat logit prob
 
         Returns:
         - last_id: The index of the last generated token.
@@ -429,9 +433,9 @@ class AudioLLM(torch.nn.Module):
             state_1 = state_prob[1]
             state_2 = state_prob[2]
             print("State 1 prob: {:.4f}, State 2 prob: {:.4f}".format(state_1.item(), state_2.item()))
-            if state_2 > 0.5:
+            if state_2 > el_prob:
                 return None, outputs['past_key_values'], 'el', None
-            if state_1 > 0.5:
+            if state_1 > ss_prob:
                 return None, outputs['past_key_values'], 'ss', None
             return None, outputs['past_key_values'], 'cl', None
 

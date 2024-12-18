@@ -40,6 +40,11 @@ def get_args():
     print(args)
     return args
 
+def custom_print(*args, **kwargs):
+    current_time = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]
+    original_print(f'[{current_time}]', *args, **kwargs)
+
+
 class audioEncoderProcessor:
     def __init__(self, chunk_size = 16):
         self.chunk_size = 16
@@ -135,6 +140,7 @@ def inference(pipeline:inferencePipeline, audio_processor:audioEncoderProcessor,
     for i in range(0, wav_input.shape[0], chunk_size):
         fbank = audio_processor.process(wav_input[i:i+chunk_size])
         outputs = pipeline.speech_dialogue(fbank, **outputs)
+        print(f"speech_dialogue outputs stat: {outputs['stat']}")
         outputs['stat'] = 'cl'
     audio_processor.reset()
         
@@ -191,6 +197,10 @@ def inference(pipeline:inferencePipeline, audio_processor:audioEncoderProcessor,
     print(whole_text)
 
 if __name__ == '__main__':
+    # change print function to add time stamp
+    original_print = builtins.print
+    builtins.print = custom_print
+
     configs = get_args()
     # encoder and audio llm
     pipeline = inferencePipeline(configs)

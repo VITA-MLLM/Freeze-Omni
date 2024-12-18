@@ -1,5 +1,7 @@
 from __future__ import print_function
 
+import builtins
+import datetime
 import time
 import math
 import argparse
@@ -17,6 +19,11 @@ import torchaudio.compliance.kaldi as k
 from web.queue import PCMQueue, ThreadSafeQueue
 from models.pipeline import inferencePipeline
 from models.decoder.llm2tts import llm2TTS
+
+
+def custom_print(*args, **kwargs):
+    current_time = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
+    original_print(f"[{current_time}]", *args, **kwargs)
 
 
 def get_args():
@@ -87,6 +94,29 @@ class audioEncoderProcessor:
         return self.input_chunk.clone()
 
 
+class GlobalVars:
+    speech_dialogue_outputs = {}
+
+    @staticmethod
+    def deepcopy_outputs():
+        return deepcopy(GlobalVars.deepcopy_outputs)
+
+
+@dataclass
+class PCMStatChunk:
+    size: int
+    status: str  # sl(start listen), cl(continue listen), el(end listen)
+    data: np.ndarray  # a numpy array of dtype np.float32
+
+    def __post_init__(self):
+        super().__post_init__()
+        if self.status not in ["sl", "cl", "el"]:
+            raise ValueError("status must be one of: 'sl','cl','el'")
+
+    def __str__(self):
+        return f"size:{self.size} status:{self.status} numpy data:{self.data.shape} {super().__str__()}"
+
+
 class PCMListener:
     def __init__(
         self,
@@ -95,10 +125,7 @@ class PCMListener:
         cache_history_size: int = 10,
         system_prompt: str = "You are a helpful assistant.",
     ) -> None:
-        self.pcm_fifo_queue = PCMQueue()  # pcm data -> in queue
-        self.listen_thread = threading.Thread(target=self.listen, args=())
-        self.stop_listen = False
-        self.listen_thread.start()
+        self.pcm_stat_chunk_queue = ThreadSafeQueue()  # pcm data -> in queue
 
         self.outputs_queue = outputs_queue
 
@@ -107,29 +134,52 @@ class PCMListener:
         # encoder and audio llm
         self.pipeline = pipeline
 
-        # pre status system prompt
-        self.status = "pre"
-        self.init_outputs = pipeline.speech_dialogue(None, stat="pre", role=system_prompt)
+        # pre status system prompt, outputs stat: pre -> sl
+        GlobalVars.speech_dialogue_outputs = pipeline.speech_dialogue(
+            None, stat="pre", role=system_prompt
+        )
 
         # chunck feat history cache also use ring buffer to do :)
         self.history = torch.zeros(
-            [cache_history_size, self.chunk_size + self.chunk_overlap, self.feat_dim]
+            [
+                cache_history_size,
+                self.audio_processor.chunk_size + self.audio_processor.chunk_overlap,
+                self.audio_processor.feat_dim,
+            ]
         )
+
+        # start listen thread
+        self.listen_thread = threading.Thread(target=self.listen, args=())
+        self.stop_listen = False
+        self.listen_thread.start()
 
     def stop(self):
         self.stop_listen = True
         self.listen_thread.join(timeout=3)
 
-    def set_status(self, status: str):
-        if status not in ["sl", "cl", "el"]:
-            raise ValueError("status must be one of: 'sl', 'cl', 'el'")
-        self.status = status
+    def send(self, pcm_items: np.ndarray, status: str):
+        """
+        将float32(<1) numpy数组按chunk_size大小切分并发送到FIFO队列缓冲区
 
-    def send(self, pcm_items: np.ndarray):
+        Args:
+            pcm_items: 输入的PCM数据数组
         """
-        send float32(<1) numpy ndarray to fifo queue buffer
-        """
-        self.pcm_fifo_queue.put(pcm_items.astype(np.float32) / 32768.0)
+        # 获取音频处理器的块大小
+        chunk_size = self.audio_processor.get_chunk_size()
+
+        # 按chunk_size大小切分数据
+        for i in range(0, len(pcm_items), chunk_size):
+            chunk = pcm_items[i : i + chunk_size]
+            # 如果最后一块数据大小不足,则用0填充
+            if len(chunk) < chunk_size:
+                padded_chunk = np.zeros(chunk_size, dtype=np.float32)
+                padded_chunk[: len(chunk)] = chunk
+                chunk = padded_chunk
+            # 将数据标准化到[-1,1]范围并发送到队列
+            item = PCMStatChunk(
+                size=chunk_size, status=status, data=chunk.astype(np.float32) / 32768.0
+            )
+            self.pcm_stat_chunk_queue.put(item)
 
     def history_buffering_strategy(self, input_chunk: torch.Tensor) -> torch.Tensor:
         # cache fbank feature (input_chunk)
@@ -163,7 +213,9 @@ class PCMListener:
             if outputs["stat"] == "cl":
                 # Stage2: continue listen
                 # stat will be auto set to 'ss' when endpoint is detected
+                print("output stat continue listen")
                 outputs = self.pipeline.speech_dialogue(feature, **outputs)
+                print(f"speech_dialogue --> output stat {outputs['stat']}")
             if is_first_pack:
                 outputs["stat"] = "cl"
             if outputs["stat"] == "el":
@@ -175,24 +227,23 @@ class PCMListener:
 
     def listen(self):
         """
-        - status: sl(start listen) -> cl(continue listen) -> ss(start generate speech to speak)
-        - status from VAD
+        chunk status from VAD
         """
         print("Start listening")
         while True:
             if self.stop_listen:
                 print("Stop listening")
                 break
-            e = self.pcm_fifo_queue.get(self.audio_processor.chunk_size)
-            if e is None:
+            stat_chunk: PCMStatChunk = self.pcm_stat_chunk_queue.get()
+            if stat_chunk is None:
                 time.sleep(0.01)
                 continue
-            print("Received PCM data: ", len(e))
+            print(f"Received PCM stat chunk: {stat_chunk}")
 
-            fbank_feature = self.audio_processor.process(np.float32(e))
-            if self.status == "sl":
+            fbank_feature = self.audio_processor.process(np.float32(stat_chunk.data))
+            if stat_chunk.status == "sl":
+                outputs = GlobalVars.deepcopy_outputs()
                 feature_last_chunk = self.history_buffering_strategy(fbank_feature)
-                outputs = deepcopy(self.init_outputs)
                 outputs["adapter_cache"] = None
                 outputs["encoder_cache"] = None
                 outputs["pe_index"] = 0
@@ -214,8 +265,8 @@ class PCMListener:
                         )
                 outputs = self.llm_prefill("cl", fbank_feature, outputs)
 
-            elif self.status == "cl" or self.status == "el":
-                outputs = self.llm_prefill(self.status, fbank_feature, outputs)
+            elif stat_chunk.status == "cl" or stat_chunk.status == "el":
+                outputs = self.llm_prefill(stat_chunk.status, fbank_feature, outputs)
 
 
 @dataclass
@@ -262,7 +313,6 @@ class TTSSpeaker:
     def reset(self):
         self.stop_speak = False
         self.is_generate = False
-        self.generate_outputs = {}
         self.whole_text = ""
 
         self.tts_over = False
@@ -279,12 +329,7 @@ class TTSSpeaker:
         print("tts_over_time:", self.tts_over_time)
 
     @property
-    def generate_outputs(self):
-        """Get the generate outputs."""
-        return self.generate_outputs
-
-    @property
-    def whole_text(self):
+    def gen_text(self):
         """Get the whole text."""
         return self.whole_text
 
@@ -356,7 +401,7 @@ class TTSSpeaker:
             output_data = self.tts_data.get()
             if output_data is not None:
                 # print("Get TTS data")
-                #yield output_data.astype(np.int16).tobytes()
+                # yield output_data.astype(np.int16).tobytes()
                 yield output_data
 
             yield None
@@ -377,7 +422,7 @@ class TTSSpeaker:
             self.is_generate = True
             outputs = self.pipeline.speech_dialogue(None, **outputs)
             # outputs dict need change, so deepcopy
-            self.generate_outputs = deepcopy(outputs)
+            GlobalVars.speech_dialogue_outputs = deepcopy(outputs)
 
             cur_hidden_state = []
             cur_hidden_state.append(outputs["hidden_state"])
@@ -398,7 +443,7 @@ class TTSSpeaker:
                 del outputs["text"]
                 del outputs["hidden_state"]
                 outputs = self.pipeline.speech_dialogue(None, **outputs)
-                self.generate_outputs = deepcopy(outputs)
+                GlobalVars.speech_dialogue_outputs = deepcopy(outputs)
                 if outputs["stat"] == "cs":
                     cur_hidden_state.append(outputs["hidden_state"])
                     if "�" in outputs["text"][len(last_text) :]:
@@ -439,12 +484,12 @@ class TTSSpeaker:
             print(self.whole_text)
 
     def interrupt(self):
-        self.stop_generate = True
+        self.stop_speak = True
         self.tts_over = True
         while True:
             time.sleep(0.01)
             if self.is_generate is False:
-                self.stop_generate = False
+                self.stop_speak = False
                 while True:
                     time.sleep(0.01)
                     if self.tts_data.is_empty():
@@ -477,18 +522,34 @@ def inference_stream(listener: PCMListener, speaker: TTSSpeaker, configs):
     if fs != 16000:
         wav = torchaudio.transforms.Resample(orig_freq=fs, new_freq=16000)(wav.float())
         fs = 16000
-    # send numpy ndarray pcm data
-    listener.send(wav.numpy())
+
+    chunk_size = list.audio_processor.get_chunk_size()
+    wav_input = torch.zeros(math.ceil(wav.shape[0] / chunk_size) * chunk_size)
+    wav_input[: wav.shape[0]] = wav
+    for i in range(0, wav_input.shape[0], chunk_size):
+        # send numpy ndarray pcm data
+        listener.send(wav.numpy())
+        listener.set_status("cl")
 
     wavs = []
     # get tts speak data
     for data in speaker.get_tts_data():
-        wavs.append(torch.tensor(data))
+        if data:
+            print(data.shape)
+            wavs.append(torch.tensor(data))
 
     sf.write(configs.output_wav, torch.cat(wav, -1).squeeze().float().cpu().numpy(), 24000)
+    print(f"write to {configs.output_wav}")
+
+    listener.stop()
+    speaker.stop()
 
 
 if __name__ == "__main__":
+    # change print function to add time stamp
+    original_print = builtins.print
+    builtins.print = custom_print
+
     configs = get_args()
 
     # encoder and audio llm
