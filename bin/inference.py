@@ -1,14 +1,7 @@
 from __future__ import print_function
 
 import argparse
-import os
-import json
-import queue
 import torch
-import yaml
-import threading
-import struct
-import time
 import torchaudio
 import datetime
 import builtins
@@ -16,15 +9,10 @@ import math
 
 import soundfile as sf
 import numpy as np
-import torch.nn.functional as F
 import torchaudio.compliance.kaldi as k
-
-from torch.utils.data import DataLoader
 
 from models.pipeline import inferencePipeline
 from models.decoder.llm2tts import llm2TTS
-from web.parms import GlobalParams
-from web.pool import TTSObjectPool
 
 def get_args():
     parser = argparse.ArgumentParser(description='Freeze-Omni')
