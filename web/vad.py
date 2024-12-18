@@ -55,6 +55,7 @@ class VAD:
         # reset all parms
         self.input_chunk = torch.zeros([1, self.chunk_size + self.chunk_overlap, self.feat_dim])
         self.input_sample = torch.zeros([1, self.CHUNK + self.frame_overlap , 1])
+        # chunck feat history cache also use ring buffer to do :)
         self.history = torch.zeros([self.cache_history, self.chunk_size + self.chunk_overlap, self.feat_dim])
         self.vad_iterator.reset_states()
         self.in_dialog = False
@@ -69,7 +70,7 @@ class VAD:
         return speech_dict_out
     
     def predict(self,
-                audio: torch.Tensor):
+                audio: np.ndarray):
         """
         Predict the Voice Activity Detection (VAD) status and return related features.
 
@@ -123,7 +124,9 @@ class VAD:
                     # self.vad_iterator.reset_states()
                 else:  
                     # cache fbank feature
+                    # << 1
                     self.history[:-1] = self.history[1:].clone()
+                    # last history = input chunk
                     self.history[-1:] = self.input_chunk
 
             # return dict

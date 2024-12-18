@@ -260,7 +260,7 @@ def send_pcm(sid):
     - sid (str): The session ID of the user.
     """
 
-    chunk_szie = connected_users[sid][1].wakeup_and_vad.get_chunk_size()
+    chunk_size = connected_users[sid][1].wakeup_and_vad.get_chunk_size()
 
     print("Sid: ", sid, " Start listening")
     while True:
@@ -270,7 +270,7 @@ def send_pcm(sid):
             connected_users[sid][1].stop_tts = True
             break
         time.sleep(0.01)
-        e = connected_users[sid][1].pcm_fifo_queue.get(chunk_szie)
+        e = connected_users[sid][1].pcm_fifo_queue.get(chunk_size)
         if e is None:
             continue
         print("Sid: ", sid, " Received PCM data: ", len(e))

@@ -133,7 +133,7 @@ class llm2TTS():
         - prefix (str, optional): The hidden state from the language model.
         - codec_chunk_size (int, default=40): The size of each chunk to process in the codec model.
         - codec_padding_size (int, default=10): The amount of padding to add on each side of the codec chunk.
-        - penalty_window_size (int, default=20): The window size for applying penalties during decoding.
+        - penalty_window_size (int, default=-1): The window size for applying penalties during decoding.
         - penalty (float, default=1.1): The penalty factor.
 
         Yields:

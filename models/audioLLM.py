@@ -259,6 +259,9 @@ class AudioLLM(torch.nn.Module):
         speech_lengths: torch.Tensor,
         extra_inputs: Optional[dict] = None,
     ):
+        """
+        speech encoder(down sample CNN+Transformer) -> adapter(down sample CNN) -> text llm(decoder_only Transformer)
+        """
         assert extra_inputs.get('past_key_values', None) is not None, "must set system role first!!!"
 
         buffer = extra_inputs.get('encoder_cache', None)
