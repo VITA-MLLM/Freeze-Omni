@@ -116,7 +116,9 @@ class PCMStatChunk:
             raise ValueError("status must be one of: 'sl','cl','el'")
 
     def __str__(self):
-        return f"status:{self.status} numpy data:{self.data.shape if self.data else None}"
+        return (
+            f"status:{self.status} numpy data:{self.data.shape if self.data is not None else None}"
+        )
 
 
 @dataclass
@@ -125,7 +127,7 @@ class GenTTSFrame:
     data: np.ndarray  # a numpy array of dtype np.float32
 
     def __str__(self):
-        return f"text:{self.text} numpy data:{self.data.shape if self.data else None}"
+        return f"text:{self.text} numpy data:{self.data.shape if self.data is not None else None}"
 
 
 class PCMListener:
@@ -178,21 +180,21 @@ class PCMListener:
         if pcm_items is None:
             item = PCMStatChunk(status=status, data=None)
             self.pcm_stat_chunk_queue.put(item)
+        else:
+            # 获取音频处理器的块大小
+            chunk_size = self.audio_processor.get_chunk_size()
 
-        # 获取音频处理器的块大小
-        chunk_size = self.audio_processor.get_chunk_size()
-
-        # 按chunk_size大小切分数据
-        for i in range(0, len(pcm_items), chunk_size):
-            chunk = pcm_items[i : i + chunk_size]
-            # 如果最后一块数据大小不足,则用0填充
-            if len(chunk) < chunk_size:
-                padded_chunk = np.zeros(chunk_size, dtype=np.float32)
-                padded_chunk[: len(chunk)] = chunk
-                chunk = padded_chunk
-            # 将数据标准化到[-1,1]范围并发送到队列
-            item = PCMStatChunk(status=status, data=chunk.astype(np.float32) / 32768.0)
-            self.pcm_stat_chunk_queue.put(item)
+            # 按chunk_size大小切分数据
+            for i in range(0, len(pcm_items), chunk_size):
+                chunk = pcm_items[i : i + chunk_size]
+                # 如果最后一块数据大小不足,则用0填充
+                if len(chunk) < chunk_size:
+                    padded_chunk = np.zeros(chunk_size, dtype=np.float32)
+                    padded_chunk[: len(chunk)] = chunk
+                    chunk = padded_chunk
+                # 将数据标准化到[-1,1]范围并发送到队列
+                item = PCMStatChunk(status=status, data=(chunk.astype(np.float32) / 32768.0))
+                self.pcm_stat_chunk_queue.put(item)
 
     def history_buffering_strategy(self, input_chunk: torch.Tensor) -> torch.Tensor:
         # cache fbank feature (input_chunk)
@@ -297,6 +299,7 @@ class PCMListener:
                 outputs["pe_index"] = 0
                 outputs["stat"] = "ss"
                 outputs["last_id"] = None
+                print("end listen put outputs")
                 self.outputs_queue.put(outputs)
 
 
@@ -417,8 +420,9 @@ class TTSSpeaker:
             if self.tts_over:
                 self.tts_data.clear()
                 self.whole_text = ""
+                self.tts_data.put(GenTTSFrame(text="", data=None))
                 break
-            frame = GenTTSFrame(text=cur_text, data=seg.squeeze().float().cpu().numpy() * 32768)
+            frame = GenTTSFrame(text=cur_text, data=seg.squeeze().float().cpu().numpy())
             self.tts_data.put(frame)
         return generate_num
 
@@ -435,8 +439,8 @@ class TTSSpeaker:
                 # print("Get TTS data")
                 # yield output_data.astype(np.int16).tobytes()
                 yield output_data
-
-            yield None
+            else:
+                yield None
 
     def speak(self):
         """
@@ -514,6 +518,7 @@ class TTSSpeaker:
             outputs["stat"] = "sl"
             outputs["last_id"] = None
             print(self.whole_text)
+            self.tts_data.put(GenTTSFrame(text="", data=None))
 
     def interrupt(self):
         self.stop_speak = True
@@ -572,9 +577,14 @@ def inference_stream(listener: PCMListener, speaker: TTSSpeaker, configs):
     for item in speaker.get_tts_data():
         if item:
             print(item)
-            wavs.append(torch.tensor(item.data))
-
-    sf.write(configs.output_wav, torch.cat(wav, -1).squeeze().float().cpu().numpy(), 24000)
+            if item.data is None:
+                break
+            else:
+                wavs.append(item.data)
+        else:
+            time.sleep(0.01) # yield thread
+    
+    sf.write(configs.output_wav, np.concatenate(wavs, -1), 24000)
     print(f"write to {configs.output_wav}")
 
     listener.stop()
