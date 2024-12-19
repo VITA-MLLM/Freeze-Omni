@@ -105,11 +105,18 @@ def inference(pipeline:inferencePipeline, audio_processor:audioEncoderProcessor,
     Returns:
     - None
     """
-    wav, fs = sf.read(configs.input_wav)
-    wav = torch.tensor(wav)
+    wav, fs = torchaudio.load(configs.input_wav)
     if fs != 16000:
-        wav = torchaudio.transforms.Resample(orig_freq=fs, new_freq=16000)(wav.float())
+        wav = torchaudio.transforms.Resample(orig_freq=fs, new_freq=16000)(wav)
         fs = 16000
+    wav = wav.reshape(-1)
+
+    #wav, fs = sf.read(configs.input_wav)
+    #wav = torch.tensor(wav)
+    #if fs != 16000:
+    #    wav = torchaudio.transforms.Resample(orig_freq=fs, new_freq=16000)(wav.float())
+    #    fs = 16000
+    print("--->",wav.shape)
     
     codec_chunk_size = 40
     codec_padding_size = 10
@@ -126,12 +133,14 @@ def inference(pipeline:inferencePipeline, audio_processor:audioEncoderProcessor,
     wav_input = torch.zeros(math.ceil(wav.shape[0] / chunk_size) * chunk_size)
     wav_input[:wav.shape[0]] = wav
     for i in range(0, wav_input.shape[0], chunk_size):
+        print("--->",wav_input.shape, wav.shape,wav_input[i:i+chunk_size].shape)
         fbank = audio_processor.process(wav_input[i:i+chunk_size])
         outputs = pipeline.speech_dialogue(fbank, **outputs)
         print(f"speech_dialogue outputs stat: {outputs['stat']}")
         outputs['stat'] = 'cl'
     audio_processor.reset()
         
+    print("listen",outputs.keys())
     outputs['adapter_cache'] = None
     outputs['encoder_cache'] = None
     outputs['pe_index'] = 0
