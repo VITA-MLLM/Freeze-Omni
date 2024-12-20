@@ -4,6 +4,7 @@ import math
 
 import numpy as np
 
+# https://en.wikipedia.org/wiki/Cepstral_mean_and_variance_normalization
 class GlobalCMVN(torch.nn.Module):
     def __init__(self,
                  mean: torch.Tensor,

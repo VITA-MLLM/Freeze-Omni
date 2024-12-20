@@ -12,7 +12,17 @@ from silero_vad.model import load_silero_vad
 from silero_vad.utils_vad import VADIterator
 
 class VAD:
-    def __init__(self, cache_history=10):
+    """
+    首先使用声学 VAD 模块来检测流式演讲的起点。
+    当VAD被触发时，语音流将被逐块发送到Freeze-Omni，并在LLM最后一层之后添加一个额外的分类层来预测不同的状态。
+    这里定义了三种状态:
+    - 状态0表示当前LLM可以继续接收语音，
+    - 状态1或2表示当前块是语音结束。
+        - 状态1表示用户将中断对话，LLM将执行新的生成阶段，
+        - 状态2表示无需中断对话。
+        这两种状态都将停止向 Freeze-Omni 发送语音流并重置 VAD 模块。
+    """
+    def __init__(self, cache_history=10, last_chunk_size=6):
         self.chunk_size = 16
         self.chunk_overlap = 3
         self.feat_dim = 80
@@ -20,7 +30,9 @@ class VAD:
         self.frame_shift = 160
         self.frame_overlap = self.frame_size - self.frame_shift
         self.CHUNK = self.frame_shift * self.chunk_size
+        assert cache_history >= last_chunk_size, "cache_history must >= last_chunk_size"
         self.cache_history = cache_history
+        self.last_chunk_size = last_chunk_size
         self.in_dialog = False
 
         with torch.no_grad():
@@ -45,6 +57,7 @@ class VAD:
         # reset all parms
         self.input_chunk = torch.zeros([1, self.chunk_size + self.chunk_overlap, self.feat_dim])
         self.input_sample = torch.zeros([1, self.CHUNK + self.frame_overlap , 1])
+        # chunck feat history cache also use ring buffer to do :)
         self.history = torch.zeros([self.cache_history, self.chunk_size + self.chunk_overlap, self.feat_dim])
         self.vad_iterator.reset_states()
         self.in_dialog = False
@@ -59,7 +72,7 @@ class VAD:
         return speech_dict_out
     
     def predict(self,
-                audio: torch.Tensor):
+                audio: np.ndarray):
         """
         Predict the Voice Activity Detection (VAD) status and return related features.
 
@@ -113,18 +126,20 @@ class VAD:
                     # self.vad_iterator.reset_states()
                 else:  
                     # cache fbank feature
+                    # << 1
                     self.history[:-1] = self.history[1:].clone()
+                    # last history = input chunk
                     self.history[-1:] = self.input_chunk
 
             # return dict
             if return_dict['status'] == 'sl':
-                # copy last 6 chunks
-                return_dict['feature_last_chunk'] = self.history[-6:].unsqueeze(1).numpy().tolist()
-                return_dict['feature'] = self.input_chunk.numpy().tolist()
-                return_dict['history_feature'] = self.history.numpy().tolist()
+                # copy last chunk size chunks
+                return_dict['feature_last_chunk'] = self.history[-self.last_chunk_size:].unsqueeze(1)
+                return_dict['feature'] = self.input_chunk
+                return_dict['history_feature'] = self.history
             elif return_dict['status'] == 'cl' or return_dict['status'] == 'el':
                 return_dict['feature_last_chunk'] = None
-                return_dict['feature'] = self.input_chunk.numpy().tolist()
-                return_dict['history_feature'] = self.history.numpy().tolist()
+                return_dict['feature'] = self.input_chunk
+                return_dict['history_feature'] = self.history
 
         return return_dict

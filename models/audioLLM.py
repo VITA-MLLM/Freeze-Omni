@@ -18,6 +18,13 @@ from models.adapter import *
 IGNORE_ID = -1
 
 class AudioLLM(torch.nn.Module):
+    """
+    Modeling of speech input
+    为了使 Freeze-Omni 能够支持语音输入并实现对输入语音的快速、低延迟响应，它利用块式流式语音编码器将输入语音特征转换为高维表示。
+    然后，适配器模块将高维表示映射到主干LLM的嵌入空间中。
+    这里的语音编码器模块由几个下采样卷积层和几个 Transformer 块组成，而适配器仅包含几个下采样卷积层。
+    使用下采样的原因是为了降低语音特征的帧率，提高预填充阶段LLM的速度，降低延迟。
+    """
     def __init__(
         self,
         encoder: torch.nn.Module,
@@ -208,6 +215,8 @@ class AudioLLM(torch.nn.Module):
             "hyps": 7,
             "/hyps": 8,
         }
+        num_params = sum(p.numel() for p in self.parameters())
+        print('the number of audio llm params: {}M'.format(num_params/1024/1024))
         
     def set_system_role(
         self,
@@ -250,6 +259,9 @@ class AudioLLM(torch.nn.Module):
         speech_lengths: torch.Tensor,
         extra_inputs: Optional[dict] = None,
     ):
+        """
+        speech encoder(down sample CNN+Transformer) -> adapter(down sample CNN) -> text llm(decoder_only Transformer)
+        """
         assert extra_inputs.get('past_key_values', None) is not None, "must set system role first!!!"
 
         buffer = extra_inputs.get('encoder_cache', None)
@@ -391,6 +403,8 @@ class AudioLLM(torch.nn.Module):
         top_p: float = 1.0,
         top_k: int = 0,
         temperature: float = 1.0,
+        el_prob: float = 0.5,
+        ss_prob: float = 0.5,
     ):
         """
         Generates the model's next output based on the current input and state.
@@ -401,6 +415,8 @@ class AudioLLM(torch.nn.Module):
         - top_p: The threshold for controlling top-p sampling.
         - top_k: The threshold for controlling top-k sampling.
         - temperature: Controls the randomness of sampling.
+        - el_prob: end listen stat logit prob
+        - ss_prob: start speak stat logit prob
 
         Returns:
         - last_id: The index of the last generated token.
@@ -417,9 +433,9 @@ class AudioLLM(torch.nn.Module):
             state_1 = state_prob[1]
             state_2 = state_prob[2]
             print("State 1 prob: {:.4f}, State 2 prob: {:.4f}".format(state_1.item(), state_2.item()))
-            if state_2 > 0.5:
+            if state_2 > el_prob:
                 return None, outputs['past_key_values'], 'el', None
-            if state_1 > 0.5:
+            if state_1 > ss_prob:
                 return None, outputs['past_key_values'], 'ss', None
             return None, outputs['past_key_values'], 'cl', None
 
