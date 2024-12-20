@@ -11,6 +11,7 @@ import soundfile as sf
 import numpy as np
 import torchaudio.compliance.kaldi as k
 
+from models.utils import print_outputs
 from models.pipeline import inferencePipeline
 from models.decoder.llm2tts import llm2TTS
 
@@ -62,14 +63,14 @@ class audioEncoderProcessor:
         self.input_chunk[:, self.chunk_overlap:, :] = xs.squeeze(0)
     
     def process(self,
-                audio: np.ndarray):
+                audio: torch.Tensor):
         """
         # 1. Converts the input audio tensor to the appropriate format.
         # 2. Computes the filter bank features (fbank) for the audio.
         # 3. Updates the input chunk and history based on the new audio segment.
         """
         with torch.no_grad():
-            sample_data = torch.tensor(audio).reshape(1, -1, 1)[:, :, :1] * 32768
+            sample_data = audio.clone().reshape(1, -1, 1)[:, :, :1] * 32768
             self.fbank_shift(sample_data)
             # use kaldi api to compute fbank
             xs = k.fbank(waveform = self.input_sample.squeeze(-1), dither=0, 
@@ -126,6 +127,7 @@ def inference(pipeline:inferencePipeline, audio_processor:audioEncoderProcessor,
     # set system role, stat will be set to 'sl'  
     stat = 'pre'
     outputs = pipeline.speech_dialogue(None, stat=stat, role="You are a helpful assistant.")
+    print(f"pre-> outputs:[{print_outputs(outputs)}]")
     chunk_size = audio_processor.get_chunk_size()
     
     # Satge1: start listen
@@ -134,20 +136,28 @@ def inference(pipeline:inferencePipeline, audio_processor:audioEncoderProcessor,
     wav_input[:wav.shape[0]] = wav
     for i in range(0, wav_input.shape[0], chunk_size):
         print("--->",wav_input.shape, wav.shape,wav_input[i:i+chunk_size].shape)
+        print(f"cl in-> outputs:{print_outputs(outputs)}")
+        if outputs['stat'] =="sl":
+            print(f"stat_chunk data:{wav_input[i:i+chunk_size]}")
         fbank = audio_processor.process(wav_input[i:i+chunk_size])
+        if outputs['stat'] =="sl":
+            print(f"fbank:{fbank}")
         outputs = pipeline.speech_dialogue(fbank, **outputs)
-        print(f"speech_dialogue outputs stat: {outputs['stat']}")
+        print(f"cl out-> outputs:{print_outputs(outputs)}")
         outputs['stat'] = 'cl'
     audio_processor.reset()
         
     print("listen",outputs.keys())
+    print(f"listen-> outputs:[{print_outputs(outputs)}]")
     outputs['adapter_cache'] = None
     outputs['encoder_cache'] = None
     outputs['pe_index'] = 0
     outputs['stat'] = 'ss'
+    print(f"speak get-> outputs:[{print_outputs(outputs)}]")
 
     # Stage3: start speak
     outputs = pipeline.speech_dialogue(None, **outputs)
+    print(f"ss-> outputs:[{print_outputs(outputs)}]")
     cur_hidden_state = []
     cur_hidden_state.append(outputs['hidden_state'])
 
@@ -166,6 +176,7 @@ def inference(pipeline:inferencePipeline, audio_processor:audioEncoderProcessor,
         del outputs['text']
         del outputs['hidden_state']
         outputs = pipeline.speech_dialogue(None, **outputs)
+        print(f"sc-> outputs:[{print_outputs(outputs)}]")
         if outputs['stat'] == 'cs':
             cur_hidden_state.append(outputs['hidden_state'])
             whole_text += outputs['text'][len(last_text):]

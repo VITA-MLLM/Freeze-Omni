@@ -1,11 +1,11 @@
-import torch
 import re
 import os
 
 import yaml
+import torch
+import numpy as np
 
 from models.audioLLM import AudioLLM
-
 from models.encoder.cmvn import GlobalCMVN, load_cmvn
 from models.encoder.encoder import speechEncoder
 
@@ -55,3 +55,14 @@ def init_encoder_llm(configs):
     model = AudioLLM(encoder=encoder, **configs['model_conf'])
 
     return model
+
+def print_outputs(outputs: dict):
+    print_str = ""
+    for key, item in outputs.items():
+        if isinstance(item, (torch.Tensor, np.ndarray)):
+            print_str += f"{key} shape:{item.shape} "
+        if isinstance(item, (str, int)):
+            print_str += f"{key}:{item} "
+        if isinstance(item, (list, tuple)):
+            print_str += f"{key} len:{len(item)} "
+    return print_str

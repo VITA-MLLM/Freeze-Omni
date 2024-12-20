@@ -23,7 +23,7 @@ class inferencePipeline():
         self.model.eval()
 
     def speech_dialogue(self, 
-                        audio: tuple, 
+                        audio: torch.Tensor, 
                         role: str=None, 
                         stat: str='sl', 
                         past_key_values=None,

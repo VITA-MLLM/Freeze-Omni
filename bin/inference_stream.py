@@ -16,6 +16,8 @@ import torch
 import torchaudio
 import torchaudio.compliance.kaldi as k
 
+from bin.inference import audioEncoderProcessor
+from models.utils import print_outputs
 from web.queue import PCMQueue, ThreadSafeQueue
 from models.pipeline import inferencePipeline
 from models.decoder.llm2tts import llm2TTS
@@ -41,59 +43,6 @@ def get_args():
     return args
 
 
-class audioEncoderProcessor:
-    def __init__(self, chunk_size=16):
-        self.chunk_size = 16
-        self.chunk_overlap = 3
-        self.feat_dim = 80
-        self.frame_size = 400
-        self.frame_shift = 160
-        self.frame_overlap = self.frame_size - self.frame_shift
-        self.CHUNK = self.frame_shift * self.chunk_size
-        self.reset()
-
-    def get_chunk_size(self):
-        return self.CHUNK
-
-    def reset(self):
-        self.input_chunk = torch.zeros([1, self.chunk_size + self.chunk_overlap, self.feat_dim])
-        self.input_sample = torch.zeros([1, self.CHUNK + self.frame_overlap, 1])
-
-    def fbank_shift(self, sample_data):
-        # fbank feature shift
-        self.input_sample[:, : self.frame_overlap, :] = self.input_sample[
-            :, -self.frame_overlap :, :
-        ].clone()
-        self.input_sample[:, self.frame_overlap :, :] = sample_data
-
-    def chunk_data_shift(self, xs):
-        # chunk feature shift
-        self.input_chunk[:, : self.chunk_overlap, :] = self.input_chunk[
-            :, -self.chunk_overlap :, :
-        ].clone()
-        self.input_chunk[:, self.chunk_overlap :, :] = xs.squeeze(0)
-
-    def process(self, audio: np.ndarray) -> torch.Tensor:
-        """
-        # 1. Converts the input audio tensor to the appropriate format.
-        # 2. Computes the filter bank features (fbank) for the audio.
-        # 3. Updates the input chunk and history based on the new audio segment.
-        """
-        with torch.no_grad():
-            sample_data = torch.tensor(audio).reshape(1, -1, 1)[:, :, :1] * 32768
-            self.fbank_shift(sample_data)
-            # use kaldi api to compute fbank
-            xs = k.fbank(
-                waveform=self.input_sample.squeeze(-1),
-                dither=0,
-                frame_length=25,
-                frame_shift=10,
-                num_mel_bins=self.feat_dim,
-            )
-            self.chunk_data_shift(xs)
-        return self.input_chunk.clone()
-
-
 class GlobalVars:
     """
     multi turn conversation interal speech dialogue outputs for listen and speak
@@ -109,7 +58,7 @@ class GlobalVars:
 @dataclass
 class PCMStatChunk:
     status: str  # sl(start listen), cl(continue listen), el(end listen)
-    data: np.ndarray  # a numpy array of dtype np.float32
+    data: torch.Tensor  # chunk tensor
 
     def __post_init__(self):
         if self.status not in ["sl", "cl", "el"]:
@@ -117,8 +66,20 @@ class PCMStatChunk:
 
     def __str__(self):
         return (
-            f"status:{self.status} numpy data:{self.data.shape if self.data is not None else None}"
+            f"status:{self.status} data shape:{self.data.shape if self.data is not None else None}"
         )
+
+
+@dataclass
+class Listen2SpeakFrame:
+    """
+    outputs have stat, so need pass it from listen to speak
+    """
+
+    outputs: dict
+
+    def __str__(self):
+        return f"outputs:{print_outputs(self.outputs)}"
 
 
 @dataclass
@@ -148,9 +109,9 @@ class PCMListener:
         self.pipeline = pipeline
 
         # pre status system prompt, outputs stat: pre -> sl
-        GlobalVars.speech_dialogue_outputs = pipeline.speech_dialogue(
-            None, stat="pre", role=system_prompt
-        )
+        self.outputs = self.pipeline.speech_dialogue(None, stat="pre", role=system_prompt)
+        # print(f"pre-> outputs:[{print_outputs(self.outputs)}]")
+        GlobalVars.speech_dialogue_outputs = self.outputs
 
         # chunck feat history cache also use ring buffer to do :)
         self.history = torch.zeros(
@@ -170,31 +131,13 @@ class PCMListener:
         self.stop_listen = True
         self.listen_thread.join(timeout=3)
 
-    def send(self, pcm_items: np.ndarray | None, status: str):
-        """
-        将float32(<1) numpy数组按chunk_size大小切分并发送到FIFO队列缓冲区
-
-        Args:
-            pcm_items: 输入的PCM数据数组
-        """
+    def send(self, pcm_items: torch.Tensor | None, status: str):
         if pcm_items is None:
             item = PCMStatChunk(status=status, data=None)
             self.pcm_stat_chunk_queue.put(item)
         else:
-            # 获取音频处理器的块大小
-            chunk_size = self.audio_processor.get_chunk_size()
-
-            # 按chunk_size大小切分数据
-            for i in range(0, len(pcm_items), chunk_size):
-                chunk = pcm_items[i : i + chunk_size]
-                # 如果最后一块数据大小不足,则用0填充
-                if len(chunk) < chunk_size:
-                    padded_chunk = np.zeros(chunk_size, dtype=np.float32)
-                    padded_chunk[: len(chunk)] = chunk
-                    chunk = padded_chunk
-                # 将数据标准化到[-1,1]范围并发送到队列
-                item = PCMStatChunk(status=status, data=(chunk.astype(np.float32) / 32768.0))
-                self.pcm_stat_chunk_queue.put(item)
+            item = PCMStatChunk(status=status, data=pcm_items)
+            self.pcm_stat_chunk_queue.put(item)
 
     def history_buffering_strategy(self, input_chunk: torch.Tensor) -> torch.Tensor:
         # cache fbank feature (input_chunk)
@@ -220,31 +163,25 @@ class PCMListener:
         if status == "sl":
             # Satge1: start listen
             # stat will be auto set to 'cl' after Stage1
-            outputs = self.pipeline.speech_dialogue(
-                torch.tensor(feature.numpy().tolist()), **outputs
-            )
-            print(f"sl --> output stat {outputs['stat']}")
+            outputs = self.pipeline.speech_dialogue(feature, **outputs)
             return outputs
         if status == "el":
             print("status end listen. start to speak")
             return outputs
 
         if status == "cl":
-            if outputs["stat"] == "cl":
+            if outputs["stat"] == "cl" or outputs["stat"] == "sl":
                 # Stage2: continue listen
                 # stat will be auto set to 'ss' when endpoint is detected
-                print("output stat continue listen")
-                outputs = self.pipeline.speech_dialogue(
-                    torch.tensor(feature.numpy().tolist()), **outputs
-                )
-                print(f"cl --> output stat {outputs['stat']}")
+                # print("output stat continue listen")
+                outputs = self.pipeline.speech_dialogue(feature, **outputs)
             if is_first_pack:
                 outputs["stat"] = "cl"
             if outputs["stat"] == "el":
                 print("output stat end listen. Detect invalid break")
             if outputs["stat"] == "ss":
-                print("output stat start speak. send outputs to queue")
-                self.outputs_queue.put(outputs)
+                # print(f"start speak. start to speak")
+                pass
         return outputs
 
     def listen(self):
@@ -260,47 +197,54 @@ class PCMListener:
             if stat_chunk is None:
                 time.sleep(0.01)
                 continue
-            print(f"Received PCM stat chunk: {stat_chunk}")
+            # print(f"Received PCM stat chunk: {stat_chunk}")
+
+            # if self.outputs['stat'] =="sl":
+            #    print(f"stat_chunk data:{stat_chunk.data}")
 
             if stat_chunk.status == "sl":
-                fbank_feature = self.audio_processor.process(np.float32(stat_chunk.data))
-                outputs = GlobalVars.deepcopy_outputs()
-                feature_last_chunk = self.history_buffering_strategy(fbank_feature)
-                outputs["adapter_cache"] = None
-                outputs["encoder_cache"] = None
-                outputs["pe_index"] = 0
-                outputs["stat"] = "sl"
-                outputs["last_id"] = None
-                if "text" in outputs:
-                    del outputs["text"]
-                if "hidden_state" in outputs:
-                    del outputs["hidden_state"]
+                fbank_feature = self.audio_processor.process(stat_chunk.data)
+                self.outputs = (
+                    GlobalVars.deepcopy_outputs()
+                )  # for next turn conversation outputs from speak where in gloab var
+                # print(f"sl-> outputs:{print_outputs(self.outputs)}")
+                self.outputs["adapter_cache"] = None
+                self.outputs["encoder_cache"] = None
+                self.outputs["pe_index"] = 0
+                self.outputs["stat"] = "sl"
+                self.outputs["last_id"] = None
+                if "text" in self.outputs:
+                    del self.outputs["text"]
+                if "hidden_state" in self.outputs:
+                    del self.outputs["hidden_state"]
 
-                for i in range(len(feature_last_chunk)):
-                    if i == 0:
-                        outputs = self.llm_prefill(
-                            "sl", feature_last_chunk[i], outputs, is_first_pack=True
-                        )
-                    else:
-                        outputs = self.llm_prefill(
-                            "cl", feature_last_chunk[i], outputs, is_first_pack=True
-                        )
-                GlobalVars.speech_dialogue_outputs = self.llm_prefill("cl", fbank_feature, outputs)
+                self.outputs = self.llm_prefill("sl", fbank_feature, self.outputs)
 
             elif stat_chunk.status == "cl":
-                fbank_feature = self.audio_processor.process(np.float32(stat_chunk.data))
-                GlobalVars.speech_dialogue_outputs = self.llm_prefill(
-                    stat_chunk.status, fbank_feature, GlobalVars.deepcopy_outputs()
-                )
+                # print(f"cl in-> outputs:{print_outputs(self.outputs)}")
+                fbank_feature = self.audio_processor.process(stat_chunk.data)
+                # if self.outputs['stat'] =="sl":
+                #    print(f"fbank:{fbank_feature}")
+                self.outputs = self.llm_prefill(stat_chunk.status, fbank_feature, self.outputs)
+                # print(f"cl out-> outputs:{print_outputs(self.outputs)}")
+                if self.outputs["stat"] == "ss":
+                    pass
+                else:
+                    self.outputs["stat"] = "cl"
             elif stat_chunk.status == "el":
-                outputs = GlobalVars.deepcopy_outputs()
-                outputs["adapter_cache"] = None
-                outputs["encoder_cache"] = None
-                outputs["pe_index"] = 0
-                outputs["stat"] = "ss"
-                outputs["last_id"] = None
-                print("end listen put outputs")
-                self.outputs_queue.put(outputs)
+                self.audio_processor.reset()
+
+                # print(f"el-> outputs:[{print_outputs(self.outputs)}]")
+                self.outputs["adapter_cache"] = None
+                self.outputs["encoder_cache"] = None
+                self.outputs["pe_index"] = 0
+                self.outputs["last_id"] = None
+                self.outputs["stat"] = "ss"
+
+            if self.outputs["stat"] == "ss":
+                frame = Listen2SpeakFrame(self.outputs)
+                # print(f"start to speak, send frame:[{frame}]")
+                self.outputs_queue.put(frame)
 
 
 @dataclass
@@ -450,15 +394,17 @@ class TTSSpeaker:
             if self.stop_speak:
                 print("Stop speak")
                 break
-            outputs = self.outputs_in_queue.get()
-            if outputs is None:
+            frame: Listen2SpeakFrame = self.outputs_in_queue.get()
+            if frame is None:
                 time.sleep(0.01)
                 continue
+
+            outputs = frame.outputs
+            # print(f"speak get-> outputs:[{print_outputs(outputs)}]")
             # Stage3: start speak
             self.is_generate = True
             outputs = self.pipeline.speech_dialogue(None, **outputs)
-            # outputs dict need change, so deepcopy
-            GlobalVars.speech_dialogue_outputs = deepcopy(outputs)
+            # print(f"ss-> outputs:[{print_outputs(outputs)}]")
 
             cur_hidden_state = []
             cur_hidden_state.append(outputs["hidden_state"])
@@ -479,7 +425,7 @@ class TTSSpeaker:
                 del outputs["text"]
                 del outputs["hidden_state"]
                 outputs = self.pipeline.speech_dialogue(None, **outputs)
-                GlobalVars.speech_dialogue_outputs = deepcopy(outputs)
+                # print(f"sc-> outputs:[{print_outputs(outputs)}]")
                 if outputs["stat"] == "cs":
                     cur_hidden_state.append(outputs["hidden_state"])
                     if "�" in outputs["text"][len(last_text) :]:
@@ -517,6 +463,7 @@ class TTSSpeaker:
             self.is_generate = False
             outputs["stat"] = "sl"
             outputs["last_id"] = None
+            GlobalVars.speech_dialogue_outputs = deepcopy(outputs)
             print(self.whole_text)
             self.tts_data.put(GenTTSFrame(text="", data=None))
 
@@ -565,11 +512,12 @@ def inference_stream(listener: PCMListener, speaker: TTSSpeaker, configs):
     wav_input = torch.zeros(math.ceil(wav.shape[0] / chunk_size) * chunk_size)
     wav_input[: wav.shape[0]] = wav
     for i in range(0, wav_input.shape[0], chunk_size):
-        # send numpy ndarray pcm data with status
-        status = "sl"
-        if i > 0:
-            status = "cl"
-        listener.send(wav_input[i : i + chunk_size].numpy(), status)
+        print("--->", wav_input.shape, wav.shape, wav_input[i : i + chunk_size].shape)
+        status = "cl"
+        if i == 0:
+            status = "sl"
+        # send pcm data with status
+        listener.send(wav_input[i : i + chunk_size], status)
     listener.send(None, "el")
 
     wavs = []
@@ -582,8 +530,8 @@ def inference_stream(listener: PCMListener, speaker: TTSSpeaker, configs):
             else:
                 wavs.append(item.data)
         else:
-            time.sleep(0.01) # yield thread
-    
+            time.sleep(0.01)  # yield thread
+
     sf.write(configs.output_wav, np.concatenate(wavs, -1), 24000)
     print(f"write to {configs.output_wav}")
 
@@ -602,7 +550,6 @@ if __name__ == "__main__":
     pipeline = inferencePipeline(configs)
     # decoder
     tts = llm2TTS(configs.model_path)
-
     # listen -> gen_queue -> speak
     gen_queue = ThreadSafeQueue()
     # listen
