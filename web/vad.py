@@ -12,6 +12,16 @@ from silero_vad.model import load_silero_vad
 from silero_vad.utils_vad import VADIterator
 
 class VAD:
+    """
+    首先使用声学 VAD 模块来检测流式演讲的起点。
+    当VAD被触发时，语音流将被逐块发送到Freeze-Omni，并在LLM最后一层之后添加一个额外的分类层来预测不同的状态。
+    这里定义了三种状态:
+    - 状态0表示当前LLM可以继续接收语音，
+    - 状态1或2表示当前块是语音结束。
+        - 状态1表示用户将中断对话，LLM将执行新的生成阶段，
+        - 状态2表示无需中断对话。
+        这两种状态都将停止向 Freeze-Omni 发送语音流并重置 VAD 模块。
+    """
     def __init__(self, cache_history=10):
         self.chunk_size = 16
         self.chunk_overlap = 3

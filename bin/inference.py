@@ -69,7 +69,12 @@ class audioEncoderProcessor:
         self.input_chunk[:, self.chunk_overlap:, :] = xs.squeeze(0)
     
     def process(self,
-                audio: torch.Tensor):
+                audio: np.ndarray):
+        """
+        # 1. Converts the input audio tensor to the appropriate format.
+        # 2. Computes the filter bank features (fbank) for the audio.
+        # 3. Updates the input chunk and history based on the new audio segment.
+        """
         with torch.no_grad():
             sample_data = torch.tensor(audio).reshape(1, -1, 1)[:, :, :1] * 32768
             self.fbank_shift(sample_data)
@@ -80,6 +85,9 @@ class audioEncoderProcessor:
         return self.input_chunk.clone()
 
 def decoder(cur_hidden_state, pipeline, cur_text, tts, codec_chunk_size, codec_padding_size, decoder_topk, wav):
+    """
+    Decodes the current hidden state and text to generate audio segments using speech decoder.
+    """
     hidden_state_output = torch.cat(cur_hidden_state).squeeze(1)
     cur_text_procced = pipeline.post_process(cur_text)
     print("Synthesis: ", [cur_text_procced])
@@ -91,7 +99,7 @@ def decoder(cur_hidden_state, pipeline, cur_text, tts, codec_chunk_size, codec_p
                         codec_chunk_size, codec_padding_size):
         wav.append(seg)
 
-def inference(pipeline, audio_processor, tts, configs):
+def inference(pipeline:inferencePipeline, audio_processor:audioEncoderProcessor, tts:llm2TTS, configs):
     """
     Perform inference for a speech dialogue system.
 
@@ -184,7 +192,10 @@ def inference(pipeline, audio_processor, tts, configs):
 
 if __name__ == '__main__':
     configs = get_args()
+    # encoder and audio llm
     pipeline = inferencePipeline(configs)
+    # decoder
     tts = llm2TTS(configs.model_path)
+    # stream chunk to encoder
     audio_processor = audioEncoderProcessor()
     inference(pipeline, audio_processor, tts, configs)

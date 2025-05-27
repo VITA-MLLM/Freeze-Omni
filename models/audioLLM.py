@@ -18,6 +18,13 @@ from models.adapter import *
 IGNORE_ID = -1
 
 class AudioLLM(torch.nn.Module):
+    """
+    Modeling of speech input
+    为了使 Freeze-Omni 能够支持语音输入并实现对输入语音的快速、低延迟响应，它利用块式流式语音编码器将输入语音特征转换为高维表示。
+    然后，适配器模块将高维表示映射到主干LLM的嵌入空间中。
+    这里的语音编码器模块由几个下采样卷积层和几个 Transformer 块组成，而适配器仅包含几个下采样卷积层。
+    使用下采样的原因是为了降低语音特征的帧率，提高预填充阶段LLM的速度，降低延迟。
+    """
     def __init__(
         self,
         encoder: torch.nn.Module,
@@ -208,6 +215,8 @@ class AudioLLM(torch.nn.Module):
             "hyps": 7,
             "/hyps": 8,
         }
+        num_params = sum(p.numel() for p in self.parameters())
+        print('the number of audio llm params: {}M'.format(num_params/1024/1024))
         
     def set_system_role(
         self,
