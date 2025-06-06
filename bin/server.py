@@ -36,6 +36,8 @@ def get_args():
     parser.add_argument('--max_users', type=int, default=5)
     parser.add_argument('--llm_exec_nums', type=int, default=1)
     parser.add_argument('--timeout', type=int, default=600)
+    parser.add_argument("--ngrok", action='store_true', help="use ngrok proxy")
+    parser.add_argument("--ssl", action='store_true', help="use ssl")
     args = parser.parse_args()
     print(args)
     return args
@@ -44,6 +46,13 @@ def custom_print(*args, **kwargs):
     current_time = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]
     original_print(f'[{current_time}]', *args, **kwargs)
 
+"""
+“模型作为服务器”策略来实现语音到语音对话系统。
+首先，我们同时启动多个模型，并将它们视为服务器。
+然后，当用户的VAD被触发时，语音将以块的形式发送到服务器，服务器将负责调度哪个空闲模型应该响应当前的块。
+由于我们在推理过程中将语音编码器和LLM的所有kv-cache和CNN缓存分开，因此服务器只需要保存每个用户的推理缓存。
+这样，服务器中的任何模型都可以响应任何用户的任何块，并且不需要指定哪个模型用作监视器或生成器。
+"""
 # init parms
 configs = get_args()
 # read server related config
@@ -216,8 +225,9 @@ def llm_prefill(data, outputs, sid, is_first_pack=False):
         # Satge1: start listen
         # stat will be auto set to 'cl' after Stage1
         outputs = connected_users[sid][1].pipeline_obj.pipeline_proc.speech_dialogue(
-                                                                     torch.tensor(data['feature']), 
+                                                                     data['feature'], 
                                                                      **outputs)
+        print(f"sl -> speech_dialogue outputs stat: {outputs['stat']}")
     
     if data['status'] == 'el':
         connected_users[sid][1].wakeup_and_vad.in_dialog = False
@@ -228,8 +238,9 @@ def llm_prefill(data, outputs, sid, is_first_pack=False):
             # Stage2: continue listen
             # stat will be auto set to 'ss' when endpoint is detected
             outputs = connected_users[sid][1].pipeline_obj.pipeline_proc.speech_dialogue(
-                                                                         torch.tensor(data['feature']), 
+                                                                         data['feature'], 
                                                                          **outputs)
+            print(f"cl -> speech_dialogue outputs stat: {outputs['stat']}")
         if is_first_pack:
             outputs['stat'] = 'cl'
         if outputs['stat'] == 'el':
@@ -251,7 +262,7 @@ def send_pcm(sid):
     - sid (str): The session ID of the user.
     """
 
-    chunk_szie = connected_users[sid][1].wakeup_and_vad.get_chunk_size()
+    chunk_size = connected_users[sid][1].wakeup_and_vad.get_chunk_size()
 
     print("Sid: ", sid, " Start listening")
     while True:
@@ -261,11 +272,12 @@ def send_pcm(sid):
             connected_users[sid][1].stop_tts = True
             break
         time.sleep(0.01)
-        e = connected_users[sid][1].pcm_fifo_queue.get(chunk_szie)
+        e = connected_users[sid][1].pcm_fifo_queue.get(chunk_size)
         if e is None:
             continue
         print("Sid: ", sid, " Received PCM data: ", len(e))
         res = connected_users[sid][1].wakeup_and_vad.predict(np.float32(e))
+        print(f"wakeup_and_vad.predict -> res status: {res['status']}")
         
         if res['status'] == 'sl':
             print("Sid: ", sid, " Vad start")
@@ -410,10 +422,30 @@ def handle_audio(data):
     else:
         disconnect()
 
+def ngrok_proxy(port):
+    """
+    run `ngrok config add-authtoken $NGROK_TOKEN`
+    """
+    from pyngrok import ngrok
+    import nest_asyncio
+
+    ngrok_tunnel = ngrok.connect(port)
+    print('Public URL:', ngrok_tunnel.public_url)
+    nest_asyncio.apply()
+
+
 if __name__ == "__main__":
     print("Start Freeze-Omni sever") 
-    cert_file = "web/resources/cert.pem"
-    key_file = "web/resources/key.pem"
-    if not os.path.exists(cert_file) or not os.path.exists(key_file):
-        generate_self_signed_cert(cert_file, key_file)
-    socketio.run(app, host=configs.ip, port=configs.port, ssl_context=(cert_file, key_file))
+    if configs.ssl:
+        cert_file = "web/resources/cert.pem"
+        key_file = "web/resources/key.pem"
+        if not os.path.exists(cert_file) or not os.path.exists(key_file):
+            generate_self_signed_cert(cert_file, key_file)
+
+    if configs.ngrok and not configs.ssl:
+        ngrok_proxy(configs.port)
+
+    if configs.ssl:
+        socketio.run(app, host=configs.ip, port=configs.port, ssl_context=(cert_file, key_file))
+    else:
+        socketio.run(app, host=configs.ip, port=configs.port)
